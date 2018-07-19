@@ -113,6 +113,14 @@ char *tokens_get_token(struct tokens *tokens, size_t n) {
   }
 }
 
+char **tokens_get_all (struct tokens *tokens)
+{
+  if (tokens == NULL || tokens->tokens_length < 1) return NULL;
+  vector_push(&tokens->tokens, &tokens->tokens_length, NULL);
+  return tokens->tokens;
+}
+
+
 void tokens_destroy(struct tokens *tokens) {
   if (tokens == NULL) {
     return;
