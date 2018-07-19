@@ -187,10 +187,26 @@ char *path_resolve (const char *program)
 /* Try to run a command */
 int run (struct tokens *tokens)
 {
+  int status;
   const char *program = tokens_get_token (tokens, 0);
   char *full_path = path_resolve (program);
   if (full_path) {
-    printf ("FULL PATH: %s\n", full_path);
+    pid_t pid = fork ();
+
+    if (pid == -1) {
+      fprintf (stderr, "Couldn't spawn new process");
+      return 1;
+    }
+
+    /* Child process */
+    if (pid == 0) {
+      char **toks = tokens_get_all (tokens);
+      execv (full_path, toks);
+    } else {
+      /* Parent process */
+      waitpid (pid, &status, 0);
+      return status;
+    }
   }
   return 0;
 }
