@@ -10,6 +10,8 @@
 #include <termios.h>
 #include <unistd.h>
 
+#include <linux/limits.h>
+
 #include "tokenizer.h"
 
 /* Convenience macro to silence compiler warnings about unused function parameters. */
@@ -29,6 +31,8 @@ pid_t shell_pgid;
 
 int cmd_exit(struct tokens *tokens);
 int cmd_help(struct tokens *tokens);
+int cmd_pwd(struct tokens *tokens);
+int cmd_cd(struct tokens *tokens);
 
 /* Built-in command functions take token array (see parse.h) and return int */
 typedef int cmd_fun_t(struct tokens *tokens);
@@ -43,6 +47,8 @@ typedef struct fun_desc {
 fun_desc_t cmd_table[] = {
   {cmd_help, "?", "show this help menu"},
   {cmd_exit, "exit", "exit the command shell"},
+  {cmd_pwd, "pwd", "shows current directory"},
+  {cmd_cd, "cd", "Change the directory to dir. If dir is not supplied, the value of the HOME shell variable is the default."},
 };
 
 /* Prints a helpful description for the given command */
@@ -55,6 +61,44 @@ int cmd_help(unused struct tokens *tokens) {
 /* Exits this shell */
 int cmd_exit(unused struct tokens *tokens) {
   exit(0);
+}
+
+int cmd_pwd(unused struct tokens *tokens)
+{
+  char path[PATH_MAX];
+  getcwd (path, PATH_MAX);
+  printf ("%s\n", path);
+  return 0;
+}
+
+
+static void _mychdir (const char *newdir)
+{
+  char oldpwd[PATH_MAX];
+  getcwd (oldpwd, PATH_MAX);
+  setenv ("OLDPWD", oldpwd, 1);
+  setenv ("PWD", newdir, 1);
+  chdir (newdir);
+}
+
+int cmd_cd(struct tokens *tokens)
+{
+  int count = tokens_get_length (tokens);
+  if (count == 1) {
+    const char *home = getenv ("HOME");
+    _mychdir (home);
+  } else if (count == 2) {
+    const char *newdir = tokens_get_token (tokens, 1);
+    if (strlen (newdir) == 1 && newdir[0] == '-') {
+      _mychdir (getenv ("OLDPWD"));
+    } else {
+      _mychdir (newdir);
+    }
+  } else {
+    fprintf (stderr, "cd: too many arguments\n");
+    return 1;
+  }
+  return 0;
 }
 
 /* Looks up the built-in command, if it exists. */
