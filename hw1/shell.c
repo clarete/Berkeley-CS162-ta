@@ -7,6 +7,7 @@
 #include <sys/types.h>
 #include <signal.h>
 #include <sys/wait.h>
+#include <sys/stat.h>
 #include <termios.h>
 #include <unistd.h>
 
@@ -33,6 +34,7 @@ int cmd_exit(struct tokens *tokens);
 int cmd_help(struct tokens *tokens);
 int cmd_pwd(struct tokens *tokens);
 int cmd_cd(struct tokens *tokens);
+int cmd_echo(struct tokens *tokens);
 
 /* Built-in command functions take token array (see parse.h) and return int */
 typedef int cmd_fun_t(struct tokens *tokens);
@@ -49,6 +51,7 @@ fun_desc_t cmd_table[] = {
   {cmd_exit, "exit", "exit the command shell"},
   {cmd_pwd, "pwd", "shows current directory"},
   {cmd_cd, "cd", "Change the directory to dir. If dir is not supplied, the value of the HOME shell variable is the default."},
+  {cmd_echo, "echo", "Echo your feelings."},
 };
 
 /* Prints a helpful description for the given command */
@@ -63,6 +66,7 @@ int cmd_exit(unused struct tokens *tokens) {
   exit(0);
 }
 
+/* Prints out current directory */
 int cmd_pwd(unused struct tokens *tokens)
 {
   char path[PATH_MAX];
@@ -70,7 +74,6 @@ int cmd_pwd(unused struct tokens *tokens)
   printf ("%s\n", path);
   return 0;
 }
-
 
 static void _mychdir (const char *newdir)
 {
@@ -81,6 +84,7 @@ static void _mychdir (const char *newdir)
   chdir (newdir);
 }
 
+/* Changes current directory */
 int cmd_cd(struct tokens *tokens)
 {
   int count = tokens_get_length (tokens);
@@ -97,6 +101,96 @@ int cmd_cd(struct tokens *tokens)
   } else {
     fprintf (stderr, "cd: too many arguments\n");
     return 1;
+  }
+  return 0;
+}
+
+/* This is primitive and broken */
+static void _interpolate (struct tokens *tokens, int start)
+{
+  int count = tokens_get_length (tokens);
+  char *token, *value;
+  for (int i = start; i < count; i++) {
+    token = tokens_get_token (tokens, i);
+    if (token[0] == '$') {
+      value = getenv (++token);
+      if (value) printf ("%s", value);
+    }
+    else
+      printf ("%s", token);
+    if (i+1 < count) printf (" ");
+  }
+  printf ("\n");
+}
+
+/* Prints out stuff at the screen */
+int cmd_echo(struct tokens *tokens)
+{
+  _interpolate (tokens, 1);
+  return 0;
+}
+
+char *isprogram (const char *dirname, const char *basename)
+{
+  struct stat sb;
+  char path[PATH_MAX];
+  snprintf (path, PATH_MAX, "%s/%s", dirname, basename);
+
+  if (stat (path, &sb) != -1) {
+    if (S_ISREG (sb.st_mode) && sb.st_mode & S_IXUSR) {
+      return strdup (path);
+    }
+  }
+  return NULL;
+}
+
+
+char *path_lookup (const char *program)
+{
+  const char *origpath;
+  char copypath[PATH_MAX];
+  char *match, *tmp = NULL;
+
+  /* Copy the PATH value since strtok will change it inplace if
+     needed */
+  origpath = getenv ("PATH");
+  memset (copypath, sizeof (char), PATH_MAX);
+  memcpy (copypath, origpath, strlen (origpath));
+
+  /* Look for program at every directory of PATH */
+  tmp = strtok (copypath, ":");
+  match = isprogram (tmp, program);
+  if (!match) {
+    while ((tmp = strtok (0, ":"))) {
+      match = isprogram (tmp, program);
+      if (match) return match;
+    }
+  }
+  return NULL;
+}
+
+/* Find a command in the path */
+char *path_resolve (const char *program)
+{
+  struct stat sb;
+  /* Account for paths that can be fully resolved */
+  if (stat (program, &sb) != -1) {
+    if (S_ISDIR(sb.st_mode)) {
+      fprintf (stderr, "%s: Is a directory\n", program);
+      return NULL;
+    }
+    return strdup (program);
+  }
+  return path_lookup (program);
+}
+
+/* Try to run a command */
+int run (struct tokens *tokens)
+{
+  const char *program = tokens_get_token (tokens, 0);
+  char *full_path = path_resolve (program);
+  if (full_path) {
+    printf ("FULL PATH: %s\n", full_path);
   }
   return 0;
 }
@@ -152,12 +246,17 @@ int main(unused int argc, unused char *argv[]) {
     /* Find which built-in function to run. */
     int fundex = lookup(tokens_get_token(tokens, 0));
 
+    /* Read the return code of the built in or program we're
+     * running */
+    char str_code[10];
+    int code;
     if (fundex >= 0) {
-      cmd_table[fundex].fun(tokens);
+      code = cmd_table[fundex].fun(tokens);
     } else {
-      /* REPLACE this to run commands as programs. */
-      fprintf(stdout, "This shell doesn't know how to run programs.\n");
+      code = run (tokens);
     }
+    sprintf (str_code, "%d", code);
+    setenv ("?",  str_code, 1);
 
     if (shell_is_interactive)
       /* Please only print shell prompts when standard input is not a tty */
