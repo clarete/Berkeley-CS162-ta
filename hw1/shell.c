@@ -184,6 +184,38 @@ char *path_resolve (const char *program)
   return path_lookup (program);
 }
 
+int get_parameters (struct tokens *tokens,
+                    char ***parameters,
+                    char **input,
+                    char **output)
+{
+  size_t len = 0;
+  size_t list_len = tokens_get_length (tokens);
+  char *token = NULL;
+  for (size_t i = 0; i < list_len; i++) {
+    token = tokens_get_token (tokens, i);
+
+    /* Handle output to file */
+    if (strcmp (token, ">") == 0) {
+      /* No file was informed after the > operator. We must stop that
+         madness!!! */
+      if (i+1 >= list_len) {
+        fprintf (stderr, "No output file provided in the redirect\n");
+        return 1;
+      }
+      *output = strdup (tokens_get_token (tokens, i + 1));
+      break;
+    }
+    vector_push (parameters, &len, token);
+  }
+
+  /* The last item of the parameters list must be the NULL sentinel,
+     otherwise execvp will behave weirdly */
+  vector_push (parameters, &len, NULL);
+
+  return 0;
+}
+
 /* Try to run a command */
 int run (struct tokens *tokens)
 {
@@ -200,8 +232,23 @@ int run (struct tokens *tokens)
 
     /* Child process */
     if (pid == 0) {
-      char **toks = tokens_get_all (tokens);
-      execv (full_path, toks);
+      char **parameters = NULL;
+      char *input = NULL, *output = NULL;
+      if (get_parameters (tokens, &parameters, &input, &output) != 0) {
+        /* Errors were already reported by get_parameters */
+        return -1;
+      }
+
+      if (output != NULL) {
+        fclose (stdout);
+        stdout = fopen (output, "wb");
+        printf ("Redirecting output to file %s\n", output);
+      }
+
+      if (execv (full_path, parameters) == -1) {
+        fprintf (stderr, "Couldn't exec in child process");
+        return -1;
+      }
     } else {
       /* Parent process */
       waitpid (pid, &status, 0);
