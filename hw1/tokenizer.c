@@ -10,7 +10,7 @@ struct tokens {
   char **buffers;
 };
 
-static void *vector_push(char ***pointer, size_t *size, void *elem) {
+void *vector_push(char ***pointer, size_t *size, void *elem) {
   *pointer = (char**) realloc(*pointer, sizeof(char *) * (*size + 1));
   (*pointer)[*size] = elem;
   *size += 1;
@@ -112,14 +112,6 @@ char *tokens_get_token(struct tokens *tokens, size_t n) {
     return tokens->tokens[n];
   }
 }
-
-char **tokens_get_all (struct tokens *tokens)
-{
-  if (tokens == NULL || tokens->tokens_length < 1) return NULL;
-  vector_push(&tokens->tokens, &tokens->tokens_length, NULL);
-  return tokens->tokens;
-}
-
 
 void tokens_destroy(struct tokens *tokens) {
   if (tokens == NULL) {
