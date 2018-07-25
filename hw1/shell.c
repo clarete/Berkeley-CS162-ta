@@ -144,7 +144,8 @@ char *isprogram (const char *dirname, const char *basename)
   return NULL;
 }
 
-
+/* Look up a program in the path and return the full path if
+   found. Return NULL otherwise. */
 char *path_lookup (const char *program)
 {
   const char *origpath;
@@ -184,6 +185,7 @@ char *path_resolve (const char *program)
   return path_lookup (program);
 }
 
+/* Read the parameters passed to the program on the command line */
 int get_parameters (struct tokens *tokens,
                     char ***parameters,
                     char **input,
@@ -192,6 +194,7 @@ int get_parameters (struct tokens *tokens,
   size_t len = 0;
   size_t list_len = tokens_get_length (tokens);
   char *token = NULL;
+
   for (size_t i = 0; i < list_len; i++) {
     token = tokens_get_token (tokens, i);
 
@@ -199,12 +202,39 @@ int get_parameters (struct tokens *tokens,
     if (strcmp (token, ">") == 0) {
       /* No file was informed after the > operator. We must stop that
          madness!!! */
-      if (i+1 >= list_len) {
+      if (++i >= list_len) {
         fprintf (stderr, "No output file provided in the redirect\n");
         return 1;
       }
-      *output = strdup (tokens_get_token (tokens, i + 1));
-      break;
+
+      /* If the output is informed multiple times we only keep the
+         last. */
+      if (*output) {
+        free (*output);
+        *output = NULL;
+      }
+      *output = strdup (tokens_get_token (tokens, i));
+
+      continue;
+    }
+
+    if (strcmp (token, "<") == 0) {
+      /* No file was informed after the > operator. We must stop that
+         madness!!! */
+      if (++i >= list_len) {
+        fprintf (stderr, "No input file provided in the redirect\n");
+        return 1;
+      }
+
+      /* If the output is informed multiple times we only keep the
+         last. */
+      if (*input) {
+        free (*input);
+        *input = NULL;
+      }
+      *input = strdup (tokens_get_token (tokens, i));
+
+      continue;
     }
     vector_push (parameters, &len, token);
   }
@@ -234,15 +264,39 @@ int run (struct tokens *tokens)
     if (pid == 0) {
       char **parameters = NULL;
       char *input = NULL, *output = NULL;
+      int outfd, infd;
+
       if (get_parameters (tokens, &parameters, &input, &output) != 0) {
         /* Errors were already reported by get_parameters */
         return -1;
       }
 
+      if (input != NULL) {
+        infd = fileno (stdin);
+        fclose (stdin);
+        FILE *fpinput = fopen (input, "rb");
+
+        if (dup2 (infd, fileno (fpinput)) == -1) {
+          fprintf (stderr, "Can't open input file %s\n", input);
+          return -1;
+        }
+
+        free (input);
+        input = NULL;
+      }
+
       if (output != NULL) {
+        outfd = fileno (stdout);
         fclose (stdout);
-        stdout = fopen (output, "wb");
-        printf ("Redirecting output to file %s\n", output);
+        FILE *fpoutput = fopen (output, "wb");
+
+        if (dup2 (outfd, fileno (fpoutput)) == -1) {
+          fprintf (stderr, "Can't open output file %s\n", output);
+          return -1;
+        }
+
+        free (output);
+        output = NULL;
       }
 
       if (execv (full_path, parameters) == -1) {
