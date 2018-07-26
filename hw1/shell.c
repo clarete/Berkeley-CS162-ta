@@ -37,6 +37,20 @@ int cmd_pwd(struct tokens *tokens);
 int cmd_cd(struct tokens *tokens);
 int cmd_echo(struct tokens *tokens);
 
+/* Process entry */
+typedef struct process {
+  char *program;
+  char **args;
+  size_t args_len;
+  char *input;
+  char *output;
+  pid_t pid;
+  bool running;
+  struct process *next;
+} process_t;
+
+process_t *process_table = NULL;
+
 /* Built-in command functions take token array (see parse.h) and return int */
 typedef int cmd_fun_t(struct tokens *tokens);
 
@@ -186,13 +200,13 @@ char *path_resolve (const char *program)
   return path_lookup (program);
 }
 
-/* Read the parameters passed to the program on the command line */
-int get_parameters (struct tokens *tokens,
-                    char ***parameters,
+/* Read the arguments passed to the program on the command line */
+int read_arguments (struct tokens *tokens,
+                    char ***arguments,
+                    size_t *len,
                     char **input,
                     char **output)
 {
-  size_t len = 0;
   size_t list_len = tokens_get_length (tokens);
   char *token = NULL;
 
@@ -237,80 +251,114 @@ int get_parameters (struct tokens *tokens,
 
       continue;
     }
-    vector_push (parameters, &len, token);
+    vector_push (arguments, len, token);
   }
 
-  /* The last item of the parameters list must be the NULL sentinel,
+  /* The last item of the arguments list must be the NULL sentinel,
      otherwise execvp will behave weirdly */
-  vector_push (parameters, &len, NULL);
+  vector_push (arguments, len, NULL);
 
   return 0;
+}
+
+process_t *new_process (struct tokens *tokens)
+{
+  process_t *proc = NULL;
+  const char *program = tokens_get_token (tokens, 0);
+  char **arguments = NULL;
+  char *input = NULL, *output = NULL;
+  char *full_path = path_resolve (program);
+  size_t len = 0;
+
+  if (full_path == NULL) {
+    fprintf (stderr, "Command %s not found\n", program);
+    return NULL;
+  }
+  if (read_arguments (tokens, &arguments, &len, &input, &output) != 0) {
+    /* Errors were already reported by read_arguments */
+    return NULL;
+  }
+  if ((proc = (process_t *) malloc (sizeof (process_t))) == NULL) {
+    fprintf (stderr, "Can't allocate memory for new process\n");
+    return NULL;
+  }
+
+  proc->program = full_path;
+  proc->args = arguments;
+  proc->args_len = len;
+  proc->running = true;
+  proc->pid = -1;
+  proc->input = input;
+  proc->output = output;
+  return proc;
+}
+
+void free_process (process_t *proc)
+{
+  if (proc->input) free (proc->input);
+  if (proc->output) free (proc->output);
+  free (proc);
 }
 
 /* Try to run a command */
 int run (struct tokens *tokens)
 {
+  process_t *proc = NULL;
   int status;
-  const char *program = tokens_get_token (tokens, 0);
-  char *full_path = path_resolve (program);
-  if (full_path) {
-    pid_t pid = fork ();
 
-    if (pid == -1) {
-      fprintf (stderr, "Couldn't spawn new process");
-      return 1;
-    }
-
-    /* Child process */
-    if (pid == 0) {
-      char **parameters = NULL;
-      char *input = NULL, *output = NULL;
-      int outfd, infd;
-
-      if (get_parameters (tokens, &parameters, &input, &output) != 0) {
-        /* Errors were already reported by get_parameters */
-        return -1;
-      }
-
-      if (input != NULL) {
-        close (STDIN_FILENO);
-        if ((infd = open (input, O_RDONLY)) == -1) {
-          fprintf (stderr, "Can't open input file %s\n", input);
-          return -1;
-        }
-        if (dup2 (STDIN_FILENO, infd) == -1) {
-          fprintf (stderr, "Can't open input file %s\n", input);
-          return -1;
-        }
-        free (input);
-        input = NULL;
-      }
-
-      if (output != NULL) {
-        close (STDOUT_FILENO);
-        if ((outfd = creat (output, S_IRUSR | S_IWUSR)) == -1) {
-          fprintf (stderr, "Can't open output file %s", output);
-          perror ("[0]");
-          return -1;
-        }
-        if (dup2 (STDOUT_FILENO, outfd) == -1) {
-          fprintf (stderr, "Can't open output file %s", output);
-          perror ("[1]");
-          return -1;
-        }
-        free (output);
-        output = NULL;
-      }
-      if (execv (full_path, parameters) == -1) {
-        fprintf (stderr, "Couldn't exec in child process");
-        return -1;
-      }
-    } else {
-      /* Parent process */
-      waitpid (pid, &status, 0);
-      return status;
-    }
+  if ((proc = new_process (tokens)) == NULL) {
+    /* Errors were already reported by new_process */
+    return -1;
   }
+  if ((proc->pid = fork ()) == -1) {
+    fprintf (stderr, "Couldn't spawn new process");
+    return 1;
+  }
+
+  /* Child process */
+  if ((proc->pid) == 0) {
+    int outfd, infd;
+
+    if (proc->input != NULL) {
+      close (STDIN_FILENO);
+      if ((infd = open (proc->input, O_RDONLY)) == -1) {
+        fprintf (stderr, "Can't open input file %s\n", proc->input);
+        return -1;
+      }
+      if (dup2 (STDIN_FILENO, infd) == -1) {
+        fprintf (stderr, "Can't open input file %s\n", proc->input);
+        return -1;
+      }
+      free (proc->input);
+      proc->input = NULL;
+    }
+
+    if (proc->output != NULL) {
+      close (STDOUT_FILENO);
+      if ((outfd = creat (proc->output, S_IRUSR | S_IWUSR)) == -1) {
+        fprintf (stderr, "Can't open output file %s", proc->output);
+        perror ("[0]");
+        return -1;
+      }
+      if (dup2 (STDOUT_FILENO, outfd) == -1) {
+        fprintf (stderr, "Can't open output file %s", proc->output);
+        perror ("[1]");
+        return -1;
+      }
+      free (proc->output);
+      proc->output = NULL;
+    }
+    if (execv (proc->program, proc->args) == -1) {
+      fprintf (stderr, "Couldn't exec in child process");
+      return -1;
+    }
+  } else {
+    /* Parent process */
+    waitpid (proc->pid, &status, 0);
+    free_process (proc);
+    return status;
+  }
+
   return 0;
 }
 
