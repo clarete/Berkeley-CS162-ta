@@ -10,6 +10,7 @@
 #include <sys/stat.h>
 #include <termios.h>
 #include <unistd.h>
+#include <fcntl.h>
 
 #include <linux/limits.h>
 
@@ -272,33 +273,34 @@ int run (struct tokens *tokens)
       }
 
       if (input != NULL) {
-        infd = fileno (stdin);
-        fclose (stdin);
-        FILE *fpinput = fopen (input, "rb");
-
-        if (dup2 (infd, fileno (fpinput)) == -1) {
+        close (STDIN_FILENO);
+        if ((infd = open (input, O_RDONLY)) == -1) {
           fprintf (stderr, "Can't open input file %s\n", input);
           return -1;
         }
-
+        if (dup2 (STDIN_FILENO, infd) == -1) {
+          fprintf (stderr, "Can't open input file %s\n", input);
+          return -1;
+        }
         free (input);
         input = NULL;
       }
 
       if (output != NULL) {
-        outfd = fileno (stdout);
-        fclose (stdout);
-        FILE *fpoutput = fopen (output, "wb");
-
-        if (dup2 (outfd, fileno (fpoutput)) == -1) {
-          fprintf (stderr, "Can't open output file %s\n", output);
+        close (STDOUT_FILENO);
+        if ((outfd = creat (output, S_IRUSR | S_IWUSR)) == -1) {
+          fprintf (stderr, "Can't open output file %s", output);
+          perror ("[0]");
           return -1;
         }
-
+        if (dup2 (STDOUT_FILENO, outfd) == -1) {
+          fprintf (stderr, "Can't open output file %s", output);
+          perror ("[1]");
+          return -1;
+        }
         free (output);
         output = NULL;
       }
-
       if (execv (full_path, parameters) == -1) {
         fprintf (stderr, "Couldn't exec in child process");
         return -1;
